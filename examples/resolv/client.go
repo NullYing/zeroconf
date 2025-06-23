@@ -12,7 +12,7 @@ import (
 var (
 	service  = flag.String("service", "_workstation._tcp", "Set the service category to look for devices.")
 	domain   = flag.String("domain", "local", "Set the search domain. For local networks, default is fine.")
-	waitTime = flag.Int("wait", 10, "Duration in [s] to run discovery.")
+	waitTime = flag.Int("wait", 20, "Duration in [s] to run discovery.")
 )
 
 func main() {
@@ -34,7 +34,8 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(*waitTime))
 	defer cancel()
-	err = resolver.Browse(ctx, *service, *domain, entries)
+	//err = resolver.Browse(ctx, *service, *domain, []string{"_universal._sub._ipps._tcp.local"}, entries)
+	err = resolver.Browse(ctx, *service, *domain, []string{}, entries)
 	if err != nil {
 		log.Fatalln("Failed to browse:", err.Error())
 	}

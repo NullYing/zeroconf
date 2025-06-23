@@ -1,8 +1,10 @@
 package zeroconf
 
 import (
+	"context"
 	"fmt"
 	"net"
+	"syscall"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
@@ -15,11 +17,11 @@ var (
 
 	// mDNS wildcard addresses
 	mdnsWildcardAddrIPv4 = &net.UDPAddr{
-		IP:   net.ParseIP("224.0.0.0"),
+		IP:   net.IPv4zero,
 		Port: 5353,
 	}
 	mdnsWildcardAddrIPv6 = &net.UDPAddr{
-		IP: net.ParseIP("ff02::"),
+		IP: net.IPv6zero,
 		// IP:   net.ParseIP("fd00::12d3:26e7:48db:e7d"),
 		Port: 5353,
 	}
@@ -35,10 +37,39 @@ var (
 	}
 )
 
+// reusePortControl 设置socket端口复用选项
+func reusePortControl(network, address string, c syscall.RawConn) error {
+	var opErr error
+	err := c.Control(func(fd uintptr) {
+		// 设置 SO_REUSEADDR 选项
+		opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
+		if opErr != nil {
+			return
+		}
+		// 设置 SO_REUSEPORT 选项（如果系统支持）
+		opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+	})
+	if err != nil {
+		return err
+	}
+	return opErr
+}
+
 func joinUdp6Multicast(interfaces []net.Interface) (*ipv6.PacketConn, error) {
-	udpConn, err := net.ListenUDP("udp6", mdnsWildcardAddrIPv6)
+	// 使用 ListenConfig 来支持端口复用
+	lc := &net.ListenConfig{
+		Control: reusePortControl,
+	}
+
+	conn, err := lc.ListenPacket(context.Background(), "udp6", mdnsWildcardAddrIPv6.String())
 	if err != nil {
 		return nil, err
+	}
+
+	udpConn, ok := conn.(*net.UDPConn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("expected *net.UDPConn, got %T", conn)
 	}
 
 	// Join multicast groups to receive announcements
@@ -67,10 +98,21 @@ func joinUdp6Multicast(interfaces []net.Interface) (*ipv6.PacketConn, error) {
 }
 
 func joinUdp4Multicast(interfaces []net.Interface) (*ipv4.PacketConn, error) {
-	udpConn, err := net.ListenUDP("udp4", mdnsWildcardAddrIPv4)
+	// 使用 ListenConfig 来支持端口复用
+	lc := &net.ListenConfig{
+		Control: reusePortControl,
+	}
+
+	conn, err := lc.ListenPacket(context.Background(), "udp4", mdnsWildcardAddrIPv4.String())
 	if err != nil {
 		// log.Printf("[ERR] bonjour: Failed to bind to udp4 mutlicast: %v", err)
 		return nil, err
+	}
+
+	udpConn, ok := conn.(*net.UDPConn)
+	if !ok {
+		conn.Close()
+		return nil, fmt.Errorf("expected *net.UDPConn, got %T", conn)
 	}
 
 	// Join multicast groups to receive announcements

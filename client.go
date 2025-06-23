@@ -82,12 +82,13 @@ func NewResolver(options ...ClientOption) (*Resolver, error) {
 }
 
 // Browse for all services of a given type in a given domain.
-func (r *Resolver) Browse(ctx context.Context, service, domain string, entries chan<- *ServiceEntry) error {
+func (r *Resolver) Browse(ctx context.Context, service, domain string, subtypes []string, entries chan<- *ServiceEntry) error {
 	params := defaultParams(service)
 	if domain != "" {
 		params.Domain = domain
 	}
 	params.Entries = entries
+	params.Subtypes = subtypes
 	params.isBrowsing = true
 	ctx, cancel := context.WithCancel(ctx)
 	go r.c.mainloop(ctx, params)
@@ -182,7 +183,7 @@ func newClient(opts clientOpts) (*client, error) {
 // Start listeners and waits for the shutdown signal from exit channel
 func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 	// start listening for responses
-	msgCh := make(chan *dns.Msg, 32)
+	msgCh := make(chan *dns.Msg, 128)
 	if c.ipv4conn != nil {
 		go c.recv(ctx, c.ipv4conn, msgCh)
 	}
@@ -202,6 +203,7 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 			return
 		case msg := <-msgCh:
 			entries = make(map[string]*ServiceEntry)
+			//fmt.Println("msg", msg)
 			sections := append(msg.Answer, msg.Ns...)
 			sections = append(sections, msg.Extra...)
 
@@ -209,9 +211,11 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 				switch rr := answer.(type) {
 				case *dns.PTR:
 					if params.ServiceName() != rr.Hdr.Name {
+						//fmt.Println("service name mismatch", rr.Hdr.Name)
 						continue
 					}
 					if params.ServiceInstanceName() != "" && params.ServiceInstanceName() != rr.Ptr {
+						//fmt.Println("service instance name mismatch", rr.Ptr)
 						continue
 					}
 					if _, ok := entries[rr.Ptr]; !ok {
@@ -346,18 +350,20 @@ func (c *client) recv(ctx context.Context, l interface{}, msgCh chan *dns.Msg) {
 			return
 		}
 
-		n, _, err := readFrom(buf)
+		n, src, err := readFrom(buf)
 		if err != nil {
 			fatalErr = err
 			continue
 		}
 		msg := new(dns.Msg)
 		if err := msg.Unpack(buf[:n]); err != nil {
-			// log.Printf("[WARN] mdns: Failed to unpack packet: %v", err)
+			log.Printf("[WARN] mdns: [%s] Failed to unpack packet: %v", src, err)
 			continue
 		}
 		select {
 		case msgCh <- msg:
+			fmt.Println(src, msg)
+
 			// Submit decoded DNS message and continue.
 		case <-ctx.Done():
 			// Abort.
