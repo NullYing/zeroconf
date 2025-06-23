@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"runtime"
 	"syscall"
 
 	"golang.org/x/net/ipv4"
@@ -37,17 +38,27 @@ var (
 	}
 )
 
-// reusePortControl 设置socket端口复用选项
+// reusePortControl 设置socket端口复用选项，兼容Windows系统
 func reusePortControl(network, address string, c syscall.RawConn) error {
 	var opErr error
 	err := c.Control(func(fd uintptr) {
-		// 设置 SO_REUSEADDR 选项
+		// 设置 SO_REUSEADDR 选项 (所有操作系统都支持)
 		opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 		if opErr != nil {
 			return
 		}
-		// 设置 SO_REUSEPORT 选项（如果系统支持）
-		opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+
+		// 仅在非Windows系统上设置 SO_REUSEPORT 选项
+		if runtime.GOOS != "windows" {
+			// SO_REUSEPORT 在 Linux, macOS 等系统上支持
+			opErr = syscall.SetsockoptInt(int(fd), syscall.SOL_SOCKET, syscall.SO_REUSEPORT, 1)
+			if opErr != nil {
+				// 如果SO_REUSEPORT失败，在某些系统上可能仍然可以工作，所以不返回错误
+				// 只有SO_REUSEADDR是必需的
+				opErr = nil
+			}
+		}
+		// Windows系统只设置SO_REUSEADDR就足够了
 	})
 	if err != nil {
 		return err
