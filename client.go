@@ -362,7 +362,7 @@ func (c *client) recv(ctx context.Context, l interface{}, msgCh chan *dns.Msg) {
 		}
 		select {
 		case msgCh <- msg:
-			fmt.Println(src, msg)
+			//fmt.Println(src, msg)
 
 			// Submit decoded DNS message and continue.
 		case <-ctx.Done():
