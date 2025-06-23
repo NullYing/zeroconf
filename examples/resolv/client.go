@@ -19,7 +19,7 @@ func main() {
 	flag.Parse()
 
 	// Discover all services on the network (e.g. _workstation._tcp)
-	resolver, err := zeroconf.NewResolver(nil)
+	resolver, err := zeroconf.NewResolver(zeroconf.SelectIPTraffic(zeroconf.IPv4AndIPv6), zeroconf.EnableUnicast(true))
 	if err != nil {
 		log.Fatalln("Failed to initialize resolver:", err.Error())
 	}

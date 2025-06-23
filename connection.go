@@ -18,12 +18,11 @@ var (
 
 	// mDNS wildcard addresses
 	mdnsWildcardAddrIPv4 = &net.UDPAddr{
-		IP:   net.IPv4zero,
+		IP:   net.ParseIP("224.0.0.0"),
 		Port: 5353,
 	}
 	mdnsWildcardAddrIPv6 = &net.UDPAddr{
-		IP: net.IPv6zero,
-		// IP:   net.ParseIP("fd00::12d3:26e7:48db:e7d"),
+		IP:   net.IPv6zero,
 		Port: 5353,
 	}
 
@@ -157,4 +156,95 @@ func listMulticastInterfaces() []net.Interface {
 	}
 
 	return interfaces
+}
+
+// createUnicastListeners creates unicast UDP listeners on interface IPs
+func createUnicastListeners(interfaces []net.Interface, listenIPv4, listenIPv6 bool) ([]*net.UDPConn, []*net.UDPConn, error) {
+	var ipv4Listeners []*net.UDPConn
+	var ipv6Listeners []*net.UDPConn
+
+	if len(interfaces) == 0 {
+		interfaces = listMulticastInterfaces()
+	}
+
+	// 使用 ListenConfig 来支持端口复用
+	lc := &net.ListenConfig{
+		Control: reusePortControl,
+	}
+
+	for _, iface := range interfaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			log.Printf("[WARN] Failed to get addresses for interface %s: %v", iface.Name, err)
+			continue
+		}
+
+		for _, addr := range addrs {
+			var ip net.IP
+			switch v := addr.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			default:
+				continue
+			}
+
+			// Skip loopback and non-unicast addresses
+			if ip.IsLoopback() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+				continue
+			}
+
+			if ip.To4() != nil && listenIPv4 {
+				// IPv4 unicast listener with port reuse
+				addr := &net.UDPAddr{IP: ip, Port: 5353}
+				conn, err := lc.ListenPacket(context.Background(), "udp4", addr.String())
+				if err != nil {
+					log.Printf("[WARN] Failed to create IPv4 unicast listener on %s: %v", ip, err)
+					continue
+				}
+
+				udpConn, ok := conn.(*net.UDPConn)
+				if !ok {
+					conn.Close()
+					log.Printf("[WARN] Expected *net.UDPConn for IPv4 unicast listener on %s", ip)
+					continue
+				}
+
+				// 设置接收缓冲区大小
+				if err := udpConn.SetReadBuffer(1024 * 1024); err != nil { // 1MB
+					log.Printf("[WARN] Failed to set read buffer for IPv4 unicast listener: %v", err)
+				}
+
+				ipv4Listeners = append(ipv4Listeners, udpConn)
+				//log.Printf("[INFO] Created IPv4 unicast listener with port reuse on %s", ip)
+
+			} else if ip.To4() == nil && listenIPv6 {
+				// IPv6 unicast listener with port reuse
+				addr := &net.UDPAddr{IP: ip, Port: 5353}
+				conn, err := lc.ListenPacket(context.Background(), "udp6", addr.String())
+				if err != nil {
+					log.Printf("[WARN] Failed to create IPv6 unicast listener on %s: %v", ip, err)
+					continue
+				}
+
+				udpConn, ok := conn.(*net.UDPConn)
+				if !ok {
+					conn.Close()
+					log.Printf("[WARN] Expected *net.UDPConn for IPv6 unicast listener on %s", ip)
+					continue
+				}
+
+				// 设置接收缓冲区大小
+				if err := udpConn.SetReadBuffer(1024 * 1024); err != nil { // 1MB
+					log.Printf("[WARN] Failed to set read buffer for IPv6 unicast listener: %v", err)
+				}
+
+				ipv6Listeners = append(ipv6Listeners, udpConn)
+				log.Printf("[INFO] Created IPv6 unicast listener with port reuse on %s", ip)
+			}
+		}
+	}
+
+	return ipv4Listeners, ipv6Listeners, nil
 }

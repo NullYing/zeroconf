@@ -29,8 +29,9 @@ const (
 )
 
 type clientOpts struct {
-	listenOn IPType
-	ifaces   []net.Interface
+	listenOn      IPType
+	ifaces        []net.Interface
+	enableUnicast bool
 }
 
 // ClientOption fills the option struct to configure intefaces, etc.
@@ -51,6 +52,13 @@ func SelectIPTraffic(t IPType) ClientOption {
 func SelectIfaces(ifaces []net.Interface) ClientOption {
 	return func(o *clientOpts) {
 		o.ifaces = ifaces
+	}
+}
+
+// EnableUnicast enables unicast listening on network interface IPs
+func EnableUnicast(enable bool) ClientOption {
+	return func(o *clientOpts) {
+		o.enableUnicast = enable
 	}
 }
 
@@ -143,9 +151,11 @@ func defaultParams(service string) *lookupParams {
 
 // Client structure encapsulates both IPv4/IPv6 UDP connections.
 type client struct {
-	ipv4conn *ipv4.PacketConn
-	ipv6conn *ipv6.PacketConn
-	ifaces   []net.Interface
+	ipv4conn        *ipv4.PacketConn
+	ipv6conn        *ipv6.PacketConn
+	ipv4unicastConn []*net.UDPConn
+	ipv6unicastConn []*net.UDPConn
+	ifaces          []net.Interface
 }
 
 // Client structure constructor
@@ -173,10 +183,25 @@ func newClient(opts clientOpts) (*client, error) {
 		}
 	}
 
+	// 创建单播监听连接
+	var ipv4unicastConn []*net.UDPConn
+	var ipv6unicastConn []*net.UDPConn
+	if opts.enableUnicast {
+		listenIPv4 := (opts.listenOn & IPv4) > 0
+		listenIPv6 := (opts.listenOn & IPv6) > 0
+		var err error
+		ipv4unicastConn, ipv6unicastConn, err = createUnicastListeners(ifaces, listenIPv4, listenIPv6)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create unicast listeners: %v", err)
+		}
+	}
+
 	return &client{
-		ipv4conn: ipv4conn,
-		ipv6conn: ipv6conn,
-		ifaces:   ifaces,
+		ipv4conn:        ipv4conn,
+		ipv6conn:        ipv6conn,
+		ipv4unicastConn: ipv4unicastConn,
+		ipv6unicastConn: ipv6unicastConn,
+		ifaces:          ifaces,
 	}, nil
 }
 
@@ -189,6 +214,14 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 	}
 	if c.ipv6conn != nil {
 		go c.recv(ctx, c.ipv6conn, msgCh)
+	}
+
+	// 启动单播监听
+	for _, conn := range c.ipv4unicastConn {
+		go c.recvUnicast(ctx, conn, msgCh)
+	}
+	for _, conn := range c.ipv6unicastConn {
+		go c.recvUnicast(ctx, conn, msgCh)
 	}
 
 	// Iterate through channels from listeners goroutines
@@ -320,6 +353,18 @@ func (c *client) shutdown() {
 	if c.ipv6conn != nil {
 		c.ipv6conn.Close()
 	}
+
+	// 关闭单播连接
+	for _, conn := range c.ipv4unicastConn {
+		if conn != nil {
+			conn.Close()
+		}
+	}
+	for _, conn := range c.ipv6unicastConn {
+		if conn != nil {
+			conn.Close()
+		}
+	}
 }
 
 type dnsMsg struct {
@@ -374,6 +419,39 @@ func (c *client) recv(ctx context.Context, l interface{}, msgCh chan *dnsMsg) {
 		case msgCh <- dMsg:
 			//fmt.Println(src, msg)
 
+			// Submit decoded DNS message and continue.
+		case <-ctx.Done():
+			// Abort.
+			return
+		}
+	}
+}
+
+// recvUnicast receives data from unicast UDP connections
+func (c *client) recvUnicast(ctx context.Context, conn *net.UDPConn, msgCh chan *dnsMsg) {
+	buf := make([]byte, 65536)
+	var fatalErr error
+	for {
+		// Handles the following cases:
+		// - ReadFromUDP aborts with error due to closed UDP connection -> causes ctx cancel
+		// - ReadFromUDP aborts otherwise.
+		if ctx.Err() != nil || fatalErr != nil {
+			return
+		}
+
+		n, src, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			fatalErr = err
+			continue
+		}
+		msg := new(dns.Msg)
+		if err := msg.Unpack(buf[:n]); err != nil {
+			log.Printf("[WARN] mdns: [%s] Failed to unpack unicast packet: %v", src, err)
+			continue
+		}
+		dMsg := &dnsMsg{msg: msg, src: src}
+		select {
+		case msgCh <- dMsg:
 			// Submit decoded DNS message and continue.
 		case <-ctx.Done():
 			// Abort.
