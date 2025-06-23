@@ -183,7 +183,7 @@ func newClient(opts clientOpts) (*client, error) {
 // Start listeners and waits for the shutdown signal from exit channel
 func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 	// start listening for responses
-	msgCh := make(chan *dns.Msg, 128)
+	msgCh := make(chan *dnsMsg, 265)
 	if c.ipv4conn != nil {
 		go c.recv(ctx, c.ipv4conn, msgCh)
 	}
@@ -201,7 +201,8 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 			params.done()
 			c.shutdown()
 			return
-		case msg := <-msgCh:
+		case dnsMsgData := <-msgCh:
+			msg := dnsMsgData.msg
 			entries = make(map[string]*ServiceEntry)
 			//fmt.Println("msg", msg)
 			sections := append(msg.Answer, msg.Ns...)
@@ -236,6 +237,9 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 							trimDot(strings.Replace(rr.Hdr.Name, params.ServiceName(), "", 1)),
 							params.Service,
 							params.Domain)
+					}
+					if udpAddr, ok := dnsMsgData.src.(*net.UDPAddr); ok {
+						entries[rr.Hdr.Name].SrcAddr = udpAddr.IP
 					}
 					entries[rr.Hdr.Name].HostName = rr.Target
 					entries[rr.Hdr.Name].Port = int(rr.Port)
@@ -318,9 +322,14 @@ func (c *client) shutdown() {
 	}
 }
 
+type dnsMsg struct {
+	msg *dns.Msg
+	src net.Addr
+}
+
 // Data receiving routine reads from connection, unpacks packets into dns.Msg
 // structures and sends them to a given msgCh channel
-func (c *client) recv(ctx context.Context, l interface{}, msgCh chan *dns.Msg) {
+func (c *client) recv(ctx context.Context, l interface{}, msgCh chan *dnsMsg) {
 	var readFrom func([]byte) (n int, src net.Addr, err error)
 
 	switch pConn := l.(type) {
@@ -360,8 +369,9 @@ func (c *client) recv(ctx context.Context, l interface{}, msgCh chan *dns.Msg) {
 			log.Printf("[WARN] mdns: [%s] Failed to unpack packet: %v", src, err)
 			continue
 		}
+		dMsg := &dnsMsg{msg: msg, src: src}
 		select {
-		case msgCh <- msg:
+		case msgCh <- dMsg:
 			//fmt.Println(src, msg)
 
 			// Submit decoded DNS message and continue.

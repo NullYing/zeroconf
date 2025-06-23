@@ -3,6 +3,7 @@ package zeroconf
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"syscall"
 
@@ -59,9 +60,16 @@ func joinUdp6Multicast(interfaces []net.Interface) (*ipv6.PacketConn, error) {
 		return nil, fmt.Errorf("expected *net.UDPConn, got %T", conn)
 	}
 
+	// 设置接收缓冲区大小
+	if err := udpConn.SetReadBuffer(1024 * 1024); err != nil { // 1MB
+		log.Printf("[WARN] Failed to set read buffer: %v", err)
+	}
+
 	// Join multicast groups to receive announcements
 	pkConn := ipv6.NewPacketConn(udpConn)
 	pkConn.SetControlMessage(ipv6.FlagInterface, true)
+	pkConn.SetControlMessage(ipv6.FlagDst, true)
+
 	_ = pkConn.SetMulticastHopLimit(255)
 
 	if len(interfaces) == 0 {
@@ -102,9 +110,15 @@ func joinUdp4Multicast(interfaces []net.Interface) (*ipv4.PacketConn, error) {
 		return nil, fmt.Errorf("expected *net.UDPConn, got %T", conn)
 	}
 
+	// 设置接收缓冲区大小以避免丢包
+	if err := udpConn.SetReadBuffer(1024 * 1024); err != nil { // 1MB
+		log.Printf("[WARN] Failed to set read buffer: %v", err)
+	}
+
 	// Join multicast groups to receive announcements
 	pkConn := ipv4.NewPacketConn(udpConn)
 	pkConn.SetControlMessage(ipv4.FlagInterface, true)
+	pkConn.SetControlMessage(ipv4.FlagDst, true)
 	_ = pkConn.SetMulticastTTL(255)
 
 	if len(interfaces) == 0 {
