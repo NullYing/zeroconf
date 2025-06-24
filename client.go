@@ -329,7 +329,8 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 					// Require at least one resolved IP address for ServiceEntry
 					// TODO: wait some more time as chances are high both will arrive.
 					if len(e.AddrIPv4) == 0 && len(e.AddrIPv6) == 0 {
-						continue
+						// 如果没有ip地址，认为来源的ip就是地址
+						e.AddrIPv4 = append(e.AddrIPv4, e.SrcAddr)
 					}
 				}
 				// Submit entry to subscriber and cache it.
@@ -452,6 +453,7 @@ func (c *client) recvUnicast(ctx context.Context, conn *net.UDPConn, msgCh chan 
 		dMsg := &dnsMsg{msg: msg, src: src}
 		select {
 		case msgCh <- dMsg:
+			//fmt.Println(msg)
 			// Submit decoded DNS message and continue.
 		case <-ctx.Done():
 			// Abort.
