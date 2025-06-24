@@ -329,6 +329,9 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 					// Require at least one resolved IP address for ServiceEntry
 					// TODO: wait some more time as chances are high both will arrive.
 					if len(e.AddrIPv4) == 0 && len(e.AddrIPv6) == 0 {
+						if len(e.SrcAddr) == 0 {
+							continue
+						}
 						// 如果没有ip地址，认为来源的ip就是地址
 						e.AddrIPv4 = append(e.AddrIPv4, e.SrcAddr)
 					}
