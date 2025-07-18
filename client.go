@@ -1,14 +1,17 @@
 package zeroconf
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log"
 	"net"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/cenkalti/backoff"
 	"github.com/miekg/dns"
@@ -282,7 +285,8 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 						entries[rr.Hdr.Name].SrcAddr = udpAddr.IP
 					}
 
-					entries[rr.Hdr.Name].HostName = rr.Target
+					// miekg 返回的中文是十进制序列，需要反转义
+					entries[rr.Hdr.Name].HostName = unescapeDecimal(rr.Target)
 					entries[rr.Hdr.Name].Port = int(rr.Port)
 					entries[rr.Hdr.Name].TTL = rr.Hdr.Ttl
 				case *dns.TXT:
@@ -586,4 +590,45 @@ func (c *client) sendQuery(msg *dns.Msg) error {
 		}
 	}
 	return nil
+}
+
+func unescapeDecimal(input string) string {
+	var buf bytes.Buffer
+
+	for i := 0; i < len(input); {
+		// 检查是否是 \ + 3 位数字
+		if input[i] == '\\' && i+4 <= len(input) {
+			sub := input[i+1 : i+4]
+			if isAllDigits(sub) {
+				// 解析十进制数
+				n, err := strconv.Atoi(sub)
+				if err == nil && n >= 0 && n <= 255 {
+					buf.WriteByte(byte(n))
+					i += 4
+					continue
+				}
+			}
+		}
+		// 否则当普通字符处理
+		buf.WriteByte(input[i])
+		i++
+	}
+
+	// 将结果作为 UTF-8 字节流转为字符串
+	if utf8.Valid(buf.Bytes()) {
+		return buf.String()
+	} else {
+		// 有非 UTF-8 情况时保底处理
+		return string([]rune(buf.String()))
+	}
+}
+
+// 判断字符串是否全为数字（3位）
+func isAllDigits(s string) bool {
+	for _, ch := range s {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
 }
