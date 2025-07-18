@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"os"
 	"runtime"
 	"strings"
 	"time"
@@ -20,6 +21,12 @@ import (
 // type passes. E.g. typical mDNS packets distributed via IPv4, often contain
 // both DNS A and AAAA entries.
 type IPType uint8
+
+var logger = log.New(os.Stdout, "", log.LstdFlags)
+
+func GetLogger() *log.Logger {
+	return logger
+}
 
 // Options for IPType.
 const (
@@ -274,6 +281,7 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 					if udpAddr, ok := dnsMsgData.src.(*net.UDPAddr); ok {
 						entries[rr.Hdr.Name].SrcAddr = udpAddr.IP
 					}
+
 					entries[rr.Hdr.Name].HostName = rr.Target
 					entries[rr.Hdr.Name].Port = int(rr.Port)
 					entries[rr.Hdr.Name].TTL = rr.Hdr.Ttl
@@ -415,7 +423,7 @@ func (c *client) recv(ctx context.Context, l interface{}, msgCh chan *dnsMsg) {
 		}
 		msg := new(dns.Msg)
 		if err := msg.Unpack(buf[:n]); err != nil {
-			log.Printf("[WARN] mdns: [%s] Failed to unpack packet: %v", src, err)
+			logger.Printf("[WARN] mdns: [%s] Failed to unpack packet: %v", src, err)
 			continue
 		}
 		dMsg := &dnsMsg{msg: msg, src: src}
@@ -450,7 +458,7 @@ func (c *client) recvUnicast(ctx context.Context, conn *net.UDPConn, msgCh chan 
 		}
 		msg := new(dns.Msg)
 		if err := msg.Unpack(buf[:n]); err != nil {
-			log.Printf("[WARN] mdns: [%s] Failed to unpack unicast packet: %v", src, err)
+			logger.Printf("[WARN] mdns: [%s] Failed to unpack unicast packet: %v", src, err)
 			continue
 		}
 		dMsg := &dnsMsg{msg: msg, src: src}
@@ -554,7 +562,7 @@ func (c *client) sendQuery(msg *dns.Msg) error {
 				wcm.IfIndex = c.ifaces[ifi].Index
 			default:
 				if err := c.ipv4conn.SetMulticastInterface(&c.ifaces[ifi]); err != nil {
-					log.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
+					logger.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
 				}
 			}
 			c.ipv4conn.WriteTo(buf, &wcm, ipv4Addr)
@@ -571,7 +579,7 @@ func (c *client) sendQuery(msg *dns.Msg) error {
 				wcm.IfIndex = c.ifaces[ifi].Index
 			default:
 				if err := c.ipv6conn.SetMulticastInterface(&c.ifaces[ifi]); err != nil {
-					log.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
+					logger.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
 				}
 			}
 			c.ipv6conn.WriteTo(buf, &wcm, ipv6Addr)

@@ -3,7 +3,6 @@ package zeroconf
 import (
 	"errors"
 	"fmt"
-	"log"
 	"math/rand"
 	"net"
 	"os"
@@ -159,11 +158,11 @@ type Server struct {
 func newServer(ifaces []net.Interface) (*Server, error) {
 	ipv4conn, err4 := joinUdp4Multicast(ifaces)
 	if err4 != nil {
-		log.Printf("[zeroconf] no suitable IPv4 interface: %s", err4.Error())
+		logger.Printf("[zeroconf] no suitable IPv4 interface: %s", err4.Error())
 	}
 	ipv6conn, err6 := joinUdp6Multicast(ifaces)
 	if err6 != nil {
-		log.Printf("[zeroconf] no suitable IPv6 interface: %s", err6.Error())
+		logger.Printf("[zeroconf] no suitable IPv6 interface: %s", err6.Error())
 	}
 	if err4 != nil && err6 != nil {
 		// No supported interface left.
@@ -289,7 +288,7 @@ func (s *Server) recv6(c *ipv6.PacketConn) {
 func (s *Server) parsePacket(packet []byte, ifIndex int, from net.Addr) error {
 	var msg dns.Msg
 	if err := msg.Unpack(packet); err != nil {
-		// log.Printf("[ERR] zeroconf: Failed to unpack packet: %v", err)
+		// logger.Printf("[ERR] zeroconf: Failed to unpack packet: %v", err)
 		return err
 	}
 	return s.handleQuery(&msg, ifIndex, from)
@@ -314,7 +313,7 @@ func (s *Server) handleQuery(query *dns.Msg, ifIndex int, from net.Addr) error {
 		resp.Answer = []dns.RR{}
 		resp.Extra = []dns.RR{}
 		if err = s.handleQuestion(q, &resp, query, ifIndex); err != nil {
-			// log.Printf("[ERR] zeroconf: failed to handle question %v: %v", q, err)
+			// logger.Printf("[ERR] zeroconf: failed to handle question %v: %v", q, err)
 			continue
 		}
 		// Check if there is an answer
@@ -356,7 +355,7 @@ func isKnownAnswer(resp *dns.Msg, query *dns.Msg) bool {
 		}
 		ptr := known.(*dns.PTR)
 		if ptr.Ptr == answer.Ptr && hdr.Ttl >= answer.Hdr.Ttl/2 {
-			// log.Printf("skipping known answer: %v", ptr)
+			// logger.Printf("skipping known answer: %v", ptr)
 			return true
 		}
 	}
@@ -525,7 +524,7 @@ func (s *Server) serviceTypeName(resp *dns.Msg, ttl uint32) {
 }
 
 // Perform probing & announcement
-//TODO: implement a proper probing & conflict resolution
+// TODO: implement a proper probing & conflict resolution
 func (s *Server) probe() {
 	q := new(dns.Msg)
 	q.SetQuestion(s.service.ServiceInstanceName(), dns.TypePTR)
@@ -558,7 +557,7 @@ func (s *Server) probe() {
 
 	for i := 0; i < multicastRepetitions; i++ {
 		if err := s.multicastResponse(q, 0); err != nil {
-			log.Println("[ERR] zeroconf: failed to send probe:", err.Error())
+			logger.Println("[ERR] zeroconf: failed to send probe:", err.Error())
 		}
 		time.Sleep(time.Duration(randomizer.Intn(250)) * time.Millisecond)
 	}
@@ -580,7 +579,7 @@ func (s *Server) probe() {
 			resp.Extra = []dns.RR{}
 			s.composeLookupAnswers(resp, s.ttl, intf.Index, true)
 			if err := s.multicastResponse(resp, intf.Index); err != nil {
-				log.Println("[ERR] zeroconf: failed to send announcement:", err.Error())
+				logger.Println("[ERR] zeroconf: failed to send announcement:", err.Error())
 			}
 		}
 		time.Sleep(timeout)
@@ -733,7 +732,7 @@ func (s *Server) multicastResponse(msg *dns.Msg, ifIndex int) error {
 			default:
 				iface, _ := net.InterfaceByIndex(ifIndex)
 				if err := s.ipv4conn.SetMulticastInterface(iface); err != nil {
-					log.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
+					logger.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
 				}
 			}
 			s.ipv4conn.WriteTo(buf, &wcm, ipv4Addr)
@@ -744,7 +743,7 @@ func (s *Server) multicastResponse(msg *dns.Msg, ifIndex int) error {
 					wcm.IfIndex = intf.Index
 				default:
 					if err := s.ipv4conn.SetMulticastInterface(&intf); err != nil {
-						log.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
+						logger.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
 					}
 				}
 				s.ipv4conn.WriteTo(buf, &wcm, ipv4Addr)
@@ -764,7 +763,7 @@ func (s *Server) multicastResponse(msg *dns.Msg, ifIndex int) error {
 			default:
 				iface, _ := net.InterfaceByIndex(ifIndex)
 				if err := s.ipv6conn.SetMulticastInterface(iface); err != nil {
-					log.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
+					logger.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
 				}
 			}
 			s.ipv6conn.WriteTo(buf, &wcm, ipv6Addr)
@@ -775,7 +774,7 @@ func (s *Server) multicastResponse(msg *dns.Msg, ifIndex int) error {
 					wcm.IfIndex = intf.Index
 				default:
 					if err := s.ipv6conn.SetMulticastInterface(&intf); err != nil {
-						log.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
+						logger.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
 					}
 				}
 				s.ipv6conn.WriteTo(buf, &wcm, ipv6Addr)

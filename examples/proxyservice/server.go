@@ -2,7 +2,6 @@ package main
 
 import (
 	"flag"
-	"log"
 	"os"
 	"os/signal"
 	"syscall"
@@ -30,13 +29,13 @@ func main() {
 		panic(err)
 	}
 	defer server.Shutdown()
-	log.Println("Published proxy service:")
-	log.Println("- Name:", *name)
-	log.Println("- Type:", *service)
-	log.Println("- Domain:", *domain)
-	log.Println("- Port:", *port)
-	log.Println("- Host:", *host)
-	log.Println("- IP:", *ip)
+	logger.Println("Published proxy service:")
+	logger.Println("- Name:", *name)
+	logger.Println("- Type:", *service)
+	logger.Println("- Domain:", *domain)
+	logger.Println("- Port:", *port)
+	logger.Println("- Host:", *host)
+	logger.Println("- IP:", *ip)
 
 	// Clean exit.
 	sig := make(chan os.Signal, 1)
@@ -54,5 +53,5 @@ func main() {
 		// Exit by timeout
 	}
 
-	log.Println("Shutting down.")
+	logger.Println("Shutting down.")
 }
