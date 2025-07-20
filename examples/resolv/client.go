@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"flag"
-	"log"
 	"time"
 
 	"github.com/NullYing/zeroconf"
@@ -21,15 +20,15 @@ func main() {
 	// Discover all services on the network (e.g. _workstation._tcp)
 	resolver, err := zeroconf.NewResolver(zeroconf.SelectIPTraffic(zeroconf.IPv4AndIPv6), zeroconf.EnableUnicast(true))
 	if err != nil {
-		log.Fatalln("Failed to initialize resolver:", err.Error())
+		logger.Fatalln("Failed to initialize resolver:", err.Error())
 	}
 
 	entries := make(chan *zeroconf.ServiceEntry)
 	go func(results <-chan *zeroconf.ServiceEntry) {
 		for entry := range results {
-			log.Println(entry)
+			logger.Println(entry)
 		}
-		log.Println("No more entries.")
+		logger.Println("No more entries.")
 	}(entries)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*time.Duration(*waitTime))
@@ -37,7 +36,7 @@ func main() {
 	//err = resolver.Browse(ctx, *service, *domain, []string{"_universal._sub._ipps._tcp.local"}, entries)
 	err = resolver.Browse(ctx, *service, *domain, []string{}, entries)
 	if err != nil {
-		log.Fatalln("Failed to browse:", err.Error())
+		logger.Fatalln("Failed to browse:", err.Error())
 	}
 
 	<-ctx.Done()
