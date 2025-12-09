@@ -17,9 +17,30 @@ var (
 
 func main() {
 	flag.Parse()
-
 	// Discover all services on the network (e.g. _workstation._tcp)
+
+	// Example 1: Use default connections (original behavior)
+	// The resolver will create and manage its own connections
 	resolver, err := zeroconf.NewResolver(zeroconf.SelectIPTraffic(zeroconf.IPv4AndIPv6), zeroconf.EnableUnicast(true))
+
+	// Example 2: Use custom connections (third-party managed)
+	// If you want to use your own connections, you can do:
+	//  1. Create your own IPv4/IPv6 PacketConn connections
+	//  2. Pass them via WithCustomConn option
+	//  3. Manage their lifecycle yourself (they won't be closed by resolver)
+	//
+	// Example code (requires additional imports: "net", "golang.org/x/net/ipv4", "golang.org/x/net/ipv6"):
+	//   lc := &net.ListenConfig{}
+	//   conn4, _ := lc.ListenPacket(context.Background(), "udp4", "224.0.0.0:5353")
+	//   udpConn4, _ := conn4.(*net.UDPConn)
+	//   ipv4Conn := ipv4.NewPacketConn(udpConn4)
+	//   conn6, _ := lc.ListenPacket(context.Background(), "udp6", "[::]:5353")
+	//   udpConn6, _ := conn6.(*net.UDPConn)
+	//   ipv6Conn := ipv6.NewPacketConn(udpConn6)
+	//   resolver, err := zeroconf.NewResolver(zeroconf.WithCustomConn(ipv4Conn, ipv6Conn, nil, nil))
+	//   defer ipv4Conn.Close()
+	//   defer ipv6Conn.Close()
+
 	if err != nil {
 		log.Fatalln("Failed to initialize resolver:", err.Error())
 	}

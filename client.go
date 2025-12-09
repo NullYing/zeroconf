@@ -29,9 +29,13 @@ const (
 )
 
 type clientOpts struct {
-	listenOn      IPType
-	ifaces        []net.Interface
-	enableUnicast bool
+	listenOn          IPType
+	ifaces            []net.Interface
+	enableUnicast     bool
+	customIPv4Conn    *ipv4.PacketConn
+	customIPv6Conn    *ipv6.PacketConn
+	customIPv4Unicast []*net.UDPConn
+	customIPv6Unicast []*net.UDPConn
 }
 
 // ClientOption fills the option struct to configure intefaces, etc.
@@ -59,6 +63,24 @@ func SelectIfaces(ifaces []net.Interface) ClientOption {
 func EnableUnicast(enable bool) ClientOption {
 	return func(o *clientOpts) {
 		o.enableUnicast = enable
+	}
+}
+
+// WithCustomConn allows providing custom network connections for mDNS operations.
+// The provided connections will be used instead of creating new ones, and they
+// will not be closed when the resolver shuts down, allowing external management
+// of connection lifecycle.
+// Parameters:
+//   - ipv4Conn: Custom IPv4 multicast PacketConn (can be nil)
+//   - ipv6Conn: Custom IPv6 multicast PacketConn (can be nil)
+//   - ipv4Unicast: Custom IPv4 unicast UDP connections (can be nil)
+//   - ipv6Unicast: Custom IPv6 unicast UDP connections (can be nil)
+func WithCustomConn(ipv4Conn *ipv4.PacketConn, ipv6Conn *ipv6.PacketConn, ipv4Unicast []*net.UDPConn, ipv6Unicast []*net.UDPConn) ClientOption {
+	return func(o *clientOpts) {
+		o.customIPv4Conn = ipv4Conn
+		o.customIPv6Conn = ipv6Conn
+		o.customIPv4Unicast = ipv4Unicast
+		o.customIPv6Unicast = ipv6Unicast
 	}
 }
 
@@ -156,6 +178,11 @@ type client struct {
 	ipv4unicastConn []*net.UDPConn
 	ipv6unicastConn []*net.UDPConn
 	ifaces          []net.Interface
+	// Flags to indicate if connections are managed externally
+	ipv4connManaged        bool
+	ipv6connManaged        bool
+	ipv4unicastConnManaged bool
+	ipv6unicastConnManaged bool
 }
 
 // Client structure constructor
@@ -164,29 +191,48 @@ func newClient(opts clientOpts) (*client, error) {
 	if len(ifaces) == 0 {
 		ifaces = listMulticastInterfaces()
 	}
-	// IPv4 interfaces
+
+	// Use custom connections if provided, otherwise create new ones
 	var ipv4conn *ipv4.PacketConn
-	if (opts.listenOn & IPv4) > 0 {
+	var ipv4connManaged bool
+	if opts.customIPv4Conn != nil {
+		ipv4conn = opts.customIPv4Conn
+		ipv4connManaged = true
+	} else if (opts.listenOn & IPv4) > 0 {
 		var err error
 		ipv4conn, err = joinUdp4Multicast(ifaces)
 		if err != nil {
 			return nil, err
 		}
+		ipv4connManaged = false
 	}
-	// IPv6 interfaces
+
 	var ipv6conn *ipv6.PacketConn
-	if (opts.listenOn & IPv6) > 0 {
+	var ipv6connManaged bool
+	if opts.customIPv6Conn != nil {
+		ipv6conn = opts.customIPv6Conn
+		ipv6connManaged = true
+	} else if (opts.listenOn & IPv6) > 0 {
 		var err error
 		ipv6conn, err = joinUdp6Multicast(ifaces)
 		if err != nil {
 			return nil, err
 		}
+		ipv6connManaged = false
 	}
 
-	// 创建单播监听连接
+	// 创建单播监听连接或使用自定义连接
 	var ipv4unicastConn []*net.UDPConn
 	var ipv6unicastConn []*net.UDPConn
-	if opts.enableUnicast {
+	var ipv4unicastConnManaged bool
+	var ipv6unicastConnManaged bool
+	if opts.customIPv4Unicast != nil || opts.customIPv6Unicast != nil {
+		// Use custom unicast connections
+		ipv4unicastConn = opts.customIPv4Unicast
+		ipv6unicastConn = opts.customIPv6Unicast
+		ipv4unicastConnManaged = true
+		ipv6unicastConnManaged = true
+	} else if opts.enableUnicast {
 		listenIPv4 := (opts.listenOn & IPv4) > 0
 		listenIPv6 := (opts.listenOn & IPv6) > 0
 		var err error
@@ -194,14 +240,20 @@ func newClient(opts clientOpts) (*client, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to create unicast listeners: %v", err)
 		}
+		ipv4unicastConnManaged = false
+		ipv6unicastConnManaged = false
 	}
 
 	return &client{
-		ipv4conn:        ipv4conn,
-		ipv6conn:        ipv6conn,
-		ipv4unicastConn: ipv4unicastConn,
-		ipv6unicastConn: ipv6unicastConn,
-		ifaces:          ifaces,
+		ipv4conn:               ipv4conn,
+		ipv6conn:               ipv6conn,
+		ipv4unicastConn:        ipv4unicastConn,
+		ipv6unicastConn:        ipv6unicastConn,
+		ifaces:                 ifaces,
+		ipv4connManaged:        ipv4connManaged,
+		ipv6connManaged:        ipv6connManaged,
+		ipv4unicastConnManaged: ipv4unicastConnManaged,
+		ipv6unicastConnManaged: ipv6unicastConnManaged,
 	}, nil
 }
 
@@ -350,23 +402,28 @@ func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 }
 
 // Shutdown client will close currently open connections and channel implicitly.
+// Connections managed externally (via WithCustomConn) will not be closed.
 func (c *client) shutdown() {
-	if c.ipv4conn != nil {
+	if c.ipv4conn != nil && !c.ipv4connManaged {
 		c.ipv4conn.Close()
 	}
-	if c.ipv6conn != nil {
+	if c.ipv6conn != nil && !c.ipv6connManaged {
 		c.ipv6conn.Close()
 	}
 
-	// 关闭单播连接
-	for _, conn := range c.ipv4unicastConn {
-		if conn != nil {
-			conn.Close()
+	// 关闭单播连接（仅关闭内部管理的连接）
+	if !c.ipv4unicastConnManaged {
+		for _, conn := range c.ipv4unicastConn {
+			if conn != nil {
+				conn.Close()
+			}
 		}
 	}
-	for _, conn := range c.ipv6unicastConn {
-		if conn != nil {
-			conn.Close()
+	if !c.ipv6unicastConnManaged {
+		for _, conn := range c.ipv6unicastConn {
+			if conn != nil {
+				conn.Close()
+			}
 		}
 	}
 }
@@ -554,7 +611,7 @@ func (c *client) sendQuery(msg *dns.Msg) error {
 				wcm.IfIndex = c.ifaces[ifi].Index
 			default:
 				if err := c.ipv4conn.SetMulticastInterface(&c.ifaces[ifi]); err != nil {
-					log.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
+					log.Printf("[WARN] mdns: Failed to set multicast interface: %s error: %v", c.ifaces[ifi].Name, err)
 				}
 			}
 			c.ipv4conn.WriteTo(buf, &wcm, ipv4Addr)
@@ -571,7 +628,7 @@ func (c *client) sendQuery(msg *dns.Msg) error {
 				wcm.IfIndex = c.ifaces[ifi].Index
 			default:
 				if err := c.ipv6conn.SetMulticastInterface(&c.ifaces[ifi]); err != nil {
-					log.Printf("[WARN] mdns: Failed to set multicast interface: %v", err)
+					log.Printf("[WARN] mdns: Failed to set multicast interface: %s error: %v", c.ifaces[ifi].Name, err)
 				}
 			}
 			c.ipv6conn.WriteTo(buf, &wcm, ipv6Addr)
