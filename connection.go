@@ -77,13 +77,23 @@ func joinUdp6Multicast(interfaces []net.Interface) (*ipv6.PacketConn, error) {
 	// log.Println("Using multicast interfaces: ", interfaces)
 
 	var failedJoins int
+	var attemptedJoins int
 	for _, iface := range interfaces {
+		// Skip interfaces that don't support IPv6
+		if !interfaceSupportsIPv6(&iface) {
+			continue
+		}
+		attemptedJoins++
 		if err := pkConn.JoinGroup(&iface, &net.UDPAddr{IP: mdnsGroupIPv6}); err != nil {
 			// log.Println("Udp6 JoinGroup failed for iface ", iface)
 			failedJoins++
 		}
 	}
-	if failedJoins == len(interfaces) {
+	if attemptedJoins == 0 {
+		pkConn.Close()
+		return nil, fmt.Errorf("udp6: no IPv6-capable interfaces found")
+	}
+	if failedJoins == attemptedJoins {
 		pkConn.Close()
 		return nil, fmt.Errorf("udp6: failed to join any of these interfaces: %v", interfaces)
 	}
@@ -126,18 +136,74 @@ func joinUdp4Multicast(interfaces []net.Interface) (*ipv4.PacketConn, error) {
 	// log.Println("Using multicast interfaces: ", interfaces)
 
 	var failedJoins int
+	var attemptedJoins int
 	for _, iface := range interfaces {
+		// Skip interfaces that don't support IPv4
+		if !interfaceSupportsIPv4(&iface) {
+			continue
+		}
+		attemptedJoins++
 		if err := pkConn.JoinGroup(&iface, &net.UDPAddr{IP: mdnsGroupIPv4}); err != nil {
 			// log.Println("Udp4 JoinGroup failed for iface ", iface)
 			failedJoins++
 		}
 	}
-	if failedJoins == len(interfaces) {
+	if attemptedJoins == 0 {
+		pkConn.Close()
+		return nil, fmt.Errorf("udp4: no IPv4-capable interfaces found")
+	}
+	if failedJoins == attemptedJoins {
 		pkConn.Close()
 		return nil, fmt.Errorf("udp4: failed to join any of these interfaces: %v", interfaces)
 	}
 
 	return pkConn, nil
+}
+
+// interfaceSupportsIPv4 checks if an interface supports IPv4
+func interfaceSupportsIPv4(iface *net.Interface) bool {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		default:
+			continue
+		}
+		if ip.To4() != nil {
+			return true
+		}
+	}
+	return false
+}
+
+// interfaceSupportsIPv6 checks if an interface supports IPv6
+func interfaceSupportsIPv6(iface *net.Interface) bool {
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return false
+	}
+	for _, addr := range addrs {
+		var ip net.IP
+		switch v := addr.(type) {
+		case *net.IPNet:
+			ip = v.IP
+		case *net.IPAddr:
+			ip = v.IP
+		default:
+			continue
+		}
+		if ip.To4() == nil && ip.To16() != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func listMulticastInterfaces() []net.Interface {
