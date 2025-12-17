@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"os"
 	"runtime"
@@ -36,7 +35,7 @@ func setReusePort(network, address string, c syscall.RawConn) error {
 		// 设置 SO_REUSEADDR 选项（所有平台都支持）
 		opErr = syscall.SetsockoptInt(socketFd, syscall.SOL_SOCKET, syscall.SO_REUSEADDR, 1)
 		if opErr != nil {
-			log.Printf("设置SO_REUSEADDR失败: %v", opErr)
+			logger.Printf("设置SO_REUSEADDR失败: %v", opErr)
 			return
 		}
 
@@ -44,12 +43,12 @@ func setReusePort(network, address string, c syscall.RawConn) error {
 		if soReusePort != -1 {
 			opErr = syscall.SetsockoptInt(socketFd, syscall.SOL_SOCKET, soReusePort, 1)
 			if opErr != nil {
-				log.Printf("设置SO_REUSEPORT失败: %v (这在某些系统上是正常的)", opErr)
+				logger.Printf("设置SO_REUSEPORT失败: %v (这在某些系统上是正常的)", opErr)
 				// 如果SO_REUSEPORT失败，不返回错误，只有SO_REUSEADDR是必需的
 				opErr = nil
 			}
 		} else {
-			log.Printf("当前平台 (%s) 不支持SO_REUSEPORT", runtime.GOOS)
+			logger.Printf("当前平台 (%s) 不支持SO_REUSEPORT", runtime.GOOS)
 		}
 	})
 	if err != nil {
@@ -77,7 +76,7 @@ func getAllNetworkInterfaces() ([]net.IP, error) {
 		// 获取接口的地址
 		addrs, err := iface.Addrs()
 		if err != nil {
-			log.Printf("获取接口 %s 的地址失败: %v", iface.Name, err)
+			logger.Printf("获取接口 %s 的地址失败: %v", iface.Name, err)
 			continue
 		}
 
@@ -120,7 +119,7 @@ func listenOnInterface(ip net.IP, port int, wg *sync.WaitGroup) {
 	fmt.Printf("正在尝试监听地址: %s\n", unicast.String())
 	uConn, err := lc.ListenPacket(context.Background(), "udp4", unicast.String())
 	if err != nil {
-		log.Printf("❌ 在 %s 上监听失败: %v", unicast.String(), err)
+		logger.Printf("❌ 在 %s 上监听失败: %v", unicast.String(), err)
 		return
 	}
 
@@ -140,7 +139,7 @@ func listenOnInterface(ip net.IP, port int, wg *sync.WaitGroup) {
 		// 接收UDP数据
 		n, clientAddr, err := udpConn.ReadFromUDP(buffer)
 		if err != nil {
-			log.Printf("❌ 在 %s 上读取UDP数据失败: %v", localAddr.String(), err)
+			logger.Printf("❌ 在 %s 上读取UDP数据失败: %v", localAddr.String(), err)
 			continue
 		}
 
