@@ -46,6 +46,9 @@ type clientOpts struct {
 	customIPv6Conn    *ipv6.PacketConn
 	customIPv4Unicast []*net.UDPConn
 	customIPv6Unicast []*net.UDPConn
+	// Raw PacketConn for custom connections that don't support ipv4/ipv6 ControlMessage
+	rawIPv4Conn net.PacketConn
+	rawIPv6Conn net.PacketConn
 }
 
 // ClientOption fills the option struct to configure intefaces, etc.
@@ -91,6 +94,20 @@ func WithCustomConn(ipv4Conn *ipv4.PacketConn, ipv6Conn *ipv6.PacketConn, ipv4Un
 		o.customIPv6Conn = ipv6Conn
 		o.customIPv4Unicast = ipv4Unicast
 		o.customIPv6Unicast = ipv6Unicast
+	}
+}
+
+// WithRawCustomConn allows providing raw net.PacketConn connections for mDNS operations.
+// Use this for custom connections (like broker/proxy connections) that don't support
+// ipv4/ipv6 ControlMessage operations.
+// The provided connections will be used directly without ipv4/ipv6 wrapper for WriteTo/ReadFrom.
+// Parameters:
+//   - ipv4Conn: Custom IPv4 multicast PacketConn (can be nil)
+//   - ipv6Conn: Custom IPv6 multicast PacketConn (can be nil)
+func WithRawCustomConn(ipv4Conn, ipv6Conn net.PacketConn) ClientOption {
+	return func(o *clientOpts) {
+		o.rawIPv4Conn = ipv4Conn
+		o.rawIPv6Conn = ipv6Conn
 	}
 }
 
@@ -193,6 +210,9 @@ type client struct {
 	ipv6connManaged        bool
 	ipv4unicastConnManaged bool
 	ipv6unicastConnManaged bool
+	// Raw PacketConn for custom connections that don't support ipv4/ipv6 ControlMessage
+	rawIPv4Conn net.PacketConn
+	rawIPv6Conn net.PacketConn
 }
 
 // Client structure constructor
@@ -264,6 +284,8 @@ func newClient(opts clientOpts) (*client, error) {
 		ipv6connManaged:        ipv6connManaged,
 		ipv4unicastConnManaged: ipv4unicastConnManaged,
 		ipv6unicastConnManaged: ipv6unicastConnManaged,
+		rawIPv4Conn:            opts.rawIPv4Conn,
+		rawIPv6Conn:            opts.rawIPv6Conn,
 	}, nil
 }
 
@@ -271,10 +293,15 @@ func newClient(opts clientOpts) (*client, error) {
 func (c *client) mainloop(ctx context.Context, params *lookupParams) {
 	// start listening for responses
 	msgCh := make(chan *dnsMsg, 265)
-	if c.ipv4conn != nil {
+	// Use raw connections if available, otherwise use ipv4/ipv6 wrapped connections
+	if c.rawIPv4Conn != nil {
+		go c.recvRaw(ctx, c.rawIPv4Conn, msgCh)
+	} else if c.ipv4conn != nil {
 		go c.recv(ctx, c.ipv4conn, msgCh)
 	}
-	if c.ipv6conn != nil {
+	if c.rawIPv6Conn != nil {
+		go c.recvRaw(ctx, c.rawIPv6Conn, msgCh)
+	} else if c.ipv6conn != nil {
 		go c.recv(ctx, c.ipv6conn, msgCh)
 	}
 
@@ -500,6 +527,37 @@ func (c *client) recv(ctx context.Context, l interface{}, msgCh chan *dnsMsg) {
 	}
 }
 
+// recvRaw receives data from raw net.PacketConn connections
+// Used for custom connections like broker/proxy that don't support ipv4/ipv6 ControlMessage
+func (c *client) recvRaw(ctx context.Context, conn net.PacketConn, msgCh chan *dnsMsg) {
+	buf := make([]byte, 65536)
+	var fatalErr error
+	for {
+		if ctx.Err() != nil || fatalErr != nil {
+			return
+		}
+
+		n, src, err := conn.ReadFrom(buf)
+		if err != nil {
+			fatalErr = err
+			continue
+		}
+		msg := new(dns.Msg)
+		if err := msg.Unpack(buf[:n]); err != nil {
+			logger.Printf("[WARN] mdns: [%s] Failed to unpack packet: %v", src, err)
+			continue
+		}
+		dMsg := &dnsMsg{msg: msg, src: src}
+		select {
+		case msgCh <- dMsg:
+			// Submit decoded DNS message and continue.
+		case <-ctx.Done():
+			// Abort.
+			return
+		}
+	}
+}
+
 // recvUnicast receives data from unicast UDP connections
 func (c *client) recvUnicast(ctx context.Context, conn *net.UDPConn, msgCh chan *dnsMsg) {
 	buf := make([]byte, 65536)
@@ -612,7 +670,15 @@ func (c *client) sendQuery(msg *dns.Msg) error {
 	if err != nil {
 		return err
 	}
-	if c.ipv4conn != nil {
+
+	// Use raw connections if available (for custom connections like broker/proxy)
+	if c.rawIPv4Conn != nil {
+		// Raw connection: use simple WriteTo without ControlMessage
+		_, err := c.rawIPv4Conn.WriteTo(buf, ipv4Addr)
+		if err != nil {
+			logger.Printf("[WARN] mdns: Failed to write to raw IPv4 connection: %v", err)
+		}
+	} else if c.ipv4conn != nil {
 		// See https://pkg.go.dev/golang.org/x/net/ipv4#pkg-note-BUG
 		// As of Golang 1.18.4
 		// On Windows, the ControlMessage for ReadFrom and WriteTo methods of PacketConn is not implemented.
@@ -629,7 +695,15 @@ func (c *client) sendQuery(msg *dns.Msg) error {
 			c.ipv4conn.WriteTo(buf, &wcm, ipv4Addr)
 		}
 	}
-	if c.ipv6conn != nil {
+
+	// Use raw connections if available (for custom connections like broker/proxy)
+	if c.rawIPv6Conn != nil {
+		// Raw connection: use simple WriteTo without ControlMessage
+		_, err := c.rawIPv6Conn.WriteTo(buf, ipv6Addr)
+		if err != nil {
+			logger.Printf("[WARN] mdns: Failed to write to raw IPv6 connection: %v", err)
+		}
+	} else if c.ipv6conn != nil {
 		// See https://pkg.go.dev/golang.org/x/net/ipv6#pkg-note-BUG
 		// As of Golang 1.18.4
 		// On Windows, the ControlMessage for ReadFrom and WriteTo methods of PacketConn is not implemented.
